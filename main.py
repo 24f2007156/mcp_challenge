@@ -16,6 +16,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "MCP Server is running! Please point your MCP Client or grading portal to the /mcp endpoint."}
+
 sessions = {}
 
 async def handle_sse_connection(request: Request):
