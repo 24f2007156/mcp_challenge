@@ -41,19 +41,12 @@ async def handle_sse_connection(request: Request):
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-async def handle_messages(request: Request, session_id: str):
-    if session_id not in sessions:
-        return Response(status_code=404, content="Session not found")
-        
-    queue = sessions[session_id]
-    payload = await request.json()
-    challenge = request.headers.get("X-Exam-Challenge")
-    
+async def process_payload(payload: dict, challenge: str):
     method = payload.get("method")
     req_id = payload.get("id")
     
     if method == "initialize":
-        await queue.put({
+        return {
             "jsonrpc": "2.0",
             "id": req_id,
             "result": {
@@ -61,9 +54,9 @@ async def handle_messages(request: Request, session_id: str):
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "exam-server", "version": "1.0"}
             }
-        })
+        }
     elif method == "tools/list":
-        await queue.put({
+        return {
             "jsonrpc": "2.0",
             "id": req_id,
             "result": {
@@ -73,7 +66,7 @@ async def handle_messages(request: Request, session_id: str):
                     "inputSchema": {"type": "object", "properties": {}}
                 }]
             }
-        })
+        }
     elif method == "tools/call":
         params = payload.get("params", {})
         if params.get("name") == "solve_challenge":
@@ -85,19 +78,40 @@ async def handle_messages(request: Request, session_id: str):
             else:
                 text_val = "Error: Missing X-Exam-Challenge header"
             
-            await queue.put({
+            return {
                 "jsonrpc": "2.0",
                 "id": req_id,
                 "result": {
                     "content": [{"type": "text", "text": text_val}]
                 }
-            })
+            }
     elif method == "ping":
-        await queue.put({
+        return {
             "jsonrpc": "2.0",
             "id": req_id,
             "result": {}
-        })
+        }
+    return None
+
+async def handle_messages_sync(request: Request):
+    payload = await request.json()
+    challenge = request.headers.get("X-Exam-Challenge")
+    response_data = await process_payload(payload, challenge)
+    if response_data:
+        return response_data
+    return Response(status_code=400, content="Unknown method")
+
+async def handle_messages_async(request: Request, session_id: str):
+    if session_id not in sessions:
+        return Response(status_code=404, content="Session not found")
+        
+    queue = sessions[session_id]
+    payload = await request.json()
+    challenge = request.headers.get("X-Exam-Challenge")
+    
+    response_data = await process_payload(payload, challenge)
+    if response_data:
+        await queue.put(response_data)
         
     return Response(status_code=202)
 
@@ -114,8 +128,9 @@ async def mcp_get(request: Request):
 @app.post("/messages")
 async def messages_post(request: Request):
     session_id = request.query_params.get("session_id")
+    if not session_id and not sessions:
+        # Synchronous mode (fallback for simple graders)
+        return await handle_messages_sync(request)
     if not session_id:
-        if not sessions:
-            return Response(status_code=400, content="No active session found")
         session_id = list(sessions.keys())[0]
-    return await handle_messages(request, session_id)
+    return await handle_messages_async(request, session_id)
