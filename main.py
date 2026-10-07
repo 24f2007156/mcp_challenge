@@ -29,7 +29,8 @@ async def handle_sse_connection(request: Request):
     
     async def event_generator():
         try:
-            yield f"event: endpoint\ndata: /messages?session_id={session_id}\n\n"
+            post_url = f"{request.url.path}?session_id={session_id}"
+            yield f"event: endpoint\ndata: {post_url}\n\n"
             while True:
                 if await request.is_disconnected():
                     break
@@ -108,6 +109,13 @@ async def sse_get(request: Request):
 async def mcp_get(request: Request):
     return await handle_sse_connection(request)
 
+@app.post("/mcp")
+@app.post("/sse")
 @app.post("/messages")
-async def messages_post(request: Request, session_id: str):
+async def messages_post(request: Request):
+    session_id = request.query_params.get("session_id")
+    if not session_id:
+        if not sessions:
+            return Response(status_code=400, content="No active session found")
+        session_id = list(sessions.keys())[0]
     return await handle_messages(request, session_id)
